@@ -27,6 +27,7 @@ async function init() {
   renderProfiles();
   renderPeriods();
   await renderIncomeLog();
+  await loadCommunityPage();
 }
 
 function nav(k) {
@@ -36,6 +37,7 @@ function nav(k) {
   document.getElementById('nb-' + k).classList.add('active');
   if (CATS.find(c => c.k === k)) loadCat(k);
   if (k === 'dashboard') loadDash();
+  if (k === 'community') loadCommunityPage();
 }
 
 async function loadProfiles() {
@@ -43,7 +45,7 @@ async function loadProfiles() {
   ST.profiles = data || [];
 }
 async function loadPeriods() {
-  const { data } = await sb.from('budget_period').select('*, budget_profile(name)').order('start_date', { ascending: false });
+  const { data } = await sb.from('budget_period').select('*, budget_profile(name, profile_type)').order('start_date', { ascending: false });
   ST.periods = data || [];
 }
 async function loadSources() {
@@ -52,9 +54,14 @@ async function loadSources() {
 }
 
 function syncSelects() {
-  const pOpts = '<option value="">--</option>' + ST.profiles.map(p => '<option value="' + p.profile_id + '">' + p.name + '</option>').join('');
+  const pOpts = '<option value="">--</option>' + ST.profiles.map(p => '<option value="' + p.profile_id + '">' + p.name + ' (' + p.profile_type + ')</option>').join('');
+  const personalOpts = '<option value="">--</option>' + ST.profiles.filter(p => p.profile_type === 'personal').map(p => '<option value="' + p.profile_id + '">' + p.name + '</option>').join('');
+  const communityOpts = '<option value="">--</option>' + ST.profiles.filter(p => p.profile_type === 'community').map(p => '<option value="' + p.profile_id + '">' + p.name + '</option>').join('');
   ['pd-prof', 'is-prof'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = pOpts; });
-  const dOpts = '<option value="">--</option>' + ST.periods.map(p => '<option value="' + p.period_id + '">' + p.label + '</option>').join('');
+  const cmPers = document.getElementById('cm-personal'); if (cmPers) cmPers.innerHTML = personalOpts;
+  const cmComm = document.getElementById('cm-community'); if (cmComm) cmComm.innerHTML = communityOpts;
+  const cbComm = document.getElementById('cb-community'); if (cbComm) cbComm.innerHTML = communityOpts;
+  const dOpts = '<option value="">--</option>' + ST.periods.map(p => '<option value="' + p.period_id + '">' + p.label + ' (' + (p.budget_profile?.name || '') + ')</option>').join('');
   ['gp', 'il-period'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = dOpts; });
   CATS.forEach(c => {
     [c.k + '-ps', c.k + '-txn-ps'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = dOpts; });
@@ -63,19 +70,21 @@ function syncSelects() {
   const sse = document.getElementById('il-source'); if (sse) sse.innerHTML = sOpts;
 }
 
+// ---- PROFILES ----
 async function addProfile() {
   const name = document.getElementById('pn').value.trim();
+  const profile_type = document.getElementById('ptype').value;
   if (!name) return msg('pm', 'Name required', 'e');
-  const { error } = await sb.from('budget_profile').insert({ name });
+  const { error } = await sb.from('budget_profile').insert({ name, profile_type });
   if (error) return msg('pm', error.message, 'e');
   msg('pm', 'Added!', 's'); document.getElementById('pn').value = '';
   await loadProfiles(); syncSelects(); renderProfiles();
 }
 function renderProfiles() {
   const tb = document.getElementById('pt');
-  if (!ST.profiles.length) { tb.innerHTML = '<tr><td colspan=3 class="empty">None yet</td></tr>'; return; }
+  if (!ST.profiles.length) { tb.innerHTML = '<tr><td colspan=4 class="empty">None yet</td></tr>'; return; }
   tb.innerHTML = ST.profiles.map(p =>
-    '<tr><td>' + p.name + '</td><td>' + new Date(p.created_at).toLocaleDateString() + '</td><td><button class="btn bd" style="padding:4px 10px;font-size:.75rem" onclick="delProfile(\'' + p.profile_id + '\')" >Del</button></td></tr>'
+    '<tr><td>' + p.name + '</td><td><span class="badge ' + (p.profile_type === 'community' ? 'bc' : 'bp2') + '">' + p.profile_type + '</span></td><td>' + new Date(p.created_at).toLocaleDateString() + '</td><td><button class="btn bd" style="padding:4px 10px;font-size:.75rem" onclick="delProfile(\'' + p.profile_id + '\')" >Del</button></td></tr>'
   ).join('');
 }
 async function delProfile(id) {
@@ -84,6 +93,7 @@ async function delProfile(id) {
   await loadProfiles(); await loadPeriods(); syncSelects(); renderProfiles(); renderPeriods();
 }
 
+// ---- PERIODS ----
 async function addPeriod() {
   const profile_id = document.getElementById('pd-prof').value;
   const label = document.getElementById('pd-lbl').value.trim();
@@ -99,7 +109,7 @@ function renderPeriods() {
   const tb = document.getElementById('pdt');
   if (!ST.periods.length) { tb.innerHTML = '<tr><td colspan=5 class="empty">None yet</td></tr>'; return; }
   tb.innerHTML = ST.periods.map(p =>
-    '<tr><td>' + (p.budget_profile?.name || '') + '</td><td>' + p.label + '</td><td>' + p.start_date + '</td><td>' + p.end_date + '</td><td><button class="btn bd" style="padding:4px 10px;font-size:.75rem" onclick="delPeriod(\'' + p.period_id + '\')" >Del</button></td></tr>'
+    '<tr><td>' + (p.budget_profile?.name || '') + '</td><td><span class="badge ' + (p.budget_profile?.profile_type === 'community' ? 'bc' : 'bp2') + '">' + (p.budget_profile?.profile_type || '') + '</span></td><td>' + p.label + '</td><td>' + p.start_date + '</td><td>' + p.end_date + '</td><td><button class="btn bd" style="padding:4px 10px;font-size:.75rem" onclick="delPeriod(\'' + p.period_id + '\')" >Del</button></td></tr>'
   ).join('');
 }
 async function delPeriod(id) {
@@ -108,6 +118,7 @@ async function delPeriod(id) {
   await loadPeriods(); syncSelects(); renderPeriods();
 }
 
+// ---- INCOME ----
 async function addSource() {
   const profile_id = document.getElementById('is-prof').value;
   const name = document.getElementById('is-name').value.trim();
@@ -140,6 +151,83 @@ async function delIncome(id) {
   await renderIncomeLog();
 }
 
+// ---- COMMUNITY PAGE ----
+async function loadCommunityPage() {
+  await loadProfiles();
+  syncSelects();
+  // render members table
+  const { data: members } = await sb.from('community_member')
+    .select('*, community:community_profile_id(name), personal:personal_profile_id(name)')
+    .order('joined_at', { ascending: false });
+  const mt = document.getElementById('cm-table');
+  if (!mt) return;
+  mt.innerHTML = members?.length
+    ? members.map(m =>
+        '<tr><td>' + (m.community?.name || '') + '</td><td>' + (m.personal?.name || '') + '</td>' +
+        '<td>' + (Number(m.share_weight) * 100).toFixed(0) + '%</td>' +
+        '<td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delMember(\'' + m.community_member_id + '\')" >Remove</button></td></tr>'
+      ).join('')
+    : '<tr><td colspan=4 class="empty">No members yet</td></tr>';
+
+  // community budget overview
+  await loadCommunityBudgetView();
+}
+
+async function addMember() {
+  const community_profile_id = document.getElementById('cm-community').value;
+  const personal_profile_id = document.getElementById('cm-personal').value;
+  const share_weight = parseFloat(document.getElementById('cm-weight').value) / 100;
+  if (!community_profile_id || !personal_profile_id || isNaN(share_weight)) return msg('cm-msg', 'All fields required', 'e');
+  if (community_profile_id === personal_profile_id) return msg('cm-msg', 'Cannot add a profile to itself', 'e');
+  const { error } = await sb.from('community_member').insert({ community_profile_id, personal_profile_id, share_weight });
+  if (error) return msg('cm-msg', error.message, 'e');
+  msg('cm-msg', 'Member added!', 's');
+  await loadCommunityPage();
+}
+async function delMember(id) {
+  await sb.from('community_member').delete().eq('community_member_id', id);
+  await loadCommunityPage();
+}
+
+async function loadCommunityBudgetView() {
+  const comm_id = document.getElementById('cb-community')?.value;
+  const ct = document.getElementById('cb-table');
+  if (!ct) return;
+  if (!comm_id) { ct.innerHTML = '<tr><td colspan=5 class="empty">Select a community above</td></tr>'; return; }
+
+  // get all members of this community
+  const { data: members } = await sb.from('community_member')
+    .select('*, personal:personal_profile_id(name)')
+    .eq('community_profile_id', comm_id);
+
+  // get all budget lines tagged to this community across all categories
+  const rows = [];
+  for (const c of CATS) {
+    const { data: lines } = await sb.from(c.k + '_budget_line')
+      .select('*, budget_period(label, budget_profile(name, profile_type)), ' + c.k + '_item(name)')
+      .eq('budget_source', 'community')
+      .eq('community_profile_id', comm_id);
+    (lines || []).forEach(l => rows.push({ cat: c.l, item: l[c.k + '_item']?.name, period: l.budget_period?.label, profile: l.budget_period?.budget_profile?.name, amount: l.budgeted_amount, source: l.budget_source }));
+  }
+
+  if (!rows.length) {
+    ct.innerHTML = '<tr><td colspan=5 class="empty">No community budget lines yet. Tag a budget line as community-sourced from a category page.</td></tr>';
+  } else {
+    ct.innerHTML = rows.map(r =>
+      '<tr><td>' + r.cat + '</td><td>' + (r.item || '') + '</td><td>' + (r.period || '') + '</td><td>' + (r.profile || '') + '</td><td>$' + Number(r.amount).toFixed(2) + '</td></tr>'
+    ).join('');
+  }
+
+  // show member split
+  const mt2 = document.getElementById('cb-members');
+  if (mt2) {
+    mt2.innerHTML = members?.length
+      ? members.map(m => '<tr><td>' + (m.personal?.name || '') + '</td><td>' + (Number(m.share_weight) * 100).toFixed(0) + '%</td></tr>').join('')
+      : '<tr><td colspan=2 class="empty">No members</td></tr>';
+  }
+}
+
+// ---- CATEGORY PAGES ----
 function buildCatPages() {
   document.getElementById('catpages').innerHTML = CATS.map(c =>
     '<div class="page" id="pg-' + c.k + '">' +
@@ -155,6 +243,8 @@ function buildCatPages() {
         '<div class="fg"><label>Period</label><select id="' + c.k + '-ps"><option value="">--</option></select></div>' +
         '<div class="fg"><label>Item</label><select id="' + c.k + '-isel"><option value="">--</option></select></div>' +
         '<div class="fg"><label>Budgeted ($)</label><input type="number" id="' + c.k + '-bamt" placeholder="0.00"></div>' +
+        '<div class="fg"><label>Source</label><select id="' + c.k + '-bsrc"><option value="personal">Personal</option><option value="community">Community</option></select></div>' +
+        '<div class="fg"><label>Community (if shared)</label><select id="' + c.k + '-bcomm"><option value="">--</option></select></div>' +
         '<button class="btn bp" onclick="addLine(\'' + c.k + '\')" >Set</button>' +
       '</div></div>' +
     '<div class="card"><h3>Log Transaction</h3><div id="' + c.k + '-tm"></div>' +
@@ -163,13 +253,15 @@ function buildCatPages() {
         '<div class="fg"><label>Item</label><select id="' + c.k + '-txn-isel"><option value="">--</option></select></div>' +
         '<div class="fg"><label>Date</label><input type="date" id="' + c.k + '-txn-date"></div>' +
         '<div class="fg"><label>Amount ($)</label><input type="number" id="' + c.k + '-txn-amt" placeholder="0.00"></div>' +
+        '<div class="fg"><label>Source</label><select id="' + c.k + '-tsrc"><option value="personal">Personal</option><option value="community">Community</option></select></div>' +
+        '<div class="fg"><label>Community (if shared)</label><select id="' + c.k + '-tcomm"><option value="">--</option></select></div>' +
         '<button class="btn bp" onclick="logTxn(\'' + c.k + '\')" >Log</button>' +
       '</div></div>' +
     '<div class="two">' +
       '<div class="card"><h3>Items</h3><table><thead><tr><th>Name</th><th>Unit</th><th></th></tr></thead><tbody id="' + c.k + '-itbl"></tbody></table></div>' +
-      '<div class="card"><h3>Budget Lines</h3><table><thead><tr><th>Period</th><th>Item</th><th>Budget</th><th></th></tr></thead><tbody id="' + c.k + '-ltbl"></tbody></table></div>' +
+      '<div class="card"><h3>Budget Lines</h3><table><thead><tr><th>Period</th><th>Item</th><th>Budget</th><th>Source</th><th></th></tr></thead><tbody id="' + c.k + '-ltbl"></tbody></table></div>' +
     '</div>' +
-    '<div class="card" style="margin-top:12px"><h3>Transactions</h3><table><thead><tr><th>Date</th><th>Item</th><th>Amount</th><th></th></tr></thead><tbody id="' + c.k + '-ttbl"></tbody></table></div>' +
+    '<div class="card" style="margin-top:12px"><h3>Transactions</h3><table><thead><tr><th>Date</th><th>Item</th><th>Amount</th><th>Source</th><th></th></tr></thead><tbody id="' + c.k + '-ttbl"></tbody></table></div>' +
     '</div>'
   ).join('');
 }
@@ -182,18 +274,30 @@ async function loadCat(k) {
     : '<tr><td colspan=3 class="empty">None</td></tr>';
   const iOpts = '<option value="">--</option>' + (items || []).map(i => '<option value="' + i[k + '_item_id'] + '">' + i.name + '</option>').join('');
   [k + '-isel', k + '-txn-isel'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = iOpts; });
-  const pOpts = '<option value="">--</option>' + ST.periods.map(p => '<option value="' + p.period_id + '">' + p.label + '</option>').join('');
+  const pOpts = '<option value="">--</option>' + ST.periods.map(p => '<option value="' + p.period_id + '">' + p.label + ' (' + (p.budget_profile?.name || '') + ')</option>').join('');
   [k + '-ps', k + '-txn-ps'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = pOpts; });
-  const { data: lines } = await sb.from(k + '_budget_line').select('*, budget_period(label), ' + k + '_item(name)').order(k + '_budget_line_id', { ascending: false });
+  const commOpts = '<option value="">--</option>' + ST.profiles.filter(p => p.profile_type === 'community').map(p => '<option value="' + p.profile_id + '">' + p.name + '</option>').join('');
+  [k + '-bcomm', k + '-tcomm'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = commOpts; });
+  const { data: lines } = await sb.from(k + '_budget_line').select('*, budget_period(label), ' + k + '_item(name), comm:community_profile_id(name)').order(k + '_budget_line_id', { ascending: false });
   const ltbl = document.getElementById(k + '-ltbl');
   ltbl.innerHTML = lines?.length
-    ? lines.map(l => '<tr><td>' + (l.budget_period?.label || '') + '</td><td>' + (l[k + '_item']?.name || '') + '</td><td>$' + Number(l.budgeted_amount).toFixed(2) + '</td><td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delLine(\'' + k + '\',\'' + l[k + '_budget_line_id'] + '\')" >Del</button></td></tr>').join('')
-    : '<tr><td colspan=4 class="empty">None</td></tr>';
-  const { data: txns } = await sb.from(k + '_transaction').select('*, budget_period(label), ' + k + '_item(name)').order('transaction_date', { ascending: false });
+    ? lines.map(l => {
+        const src = l.budget_source === 'community'
+          ? '<span class="badge bc">community: ' + (l.comm?.name || '') + '</span>'
+          : '<span class="badge bp2">personal</span>';
+        return '<tr><td>' + (l.budget_period?.label || '') + '</td><td>' + (l[k + '_item']?.name || '') + '</td><td>$' + Number(l.budgeted_amount).toFixed(2) + '</td><td>' + src + '</td><td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delLine(\'' + k + '\',\'' + l[k + '_budget_line_id'] + '\')" >Del</button></td></tr>';
+      }).join('')
+    : '<tr><td colspan=5 class="empty">None</td></tr>';
+  const { data: txns } = await sb.from(k + '_transaction').select('*, budget_period(label), ' + k + '_item(name), comm:community_profile_id(name)').order('transaction_date', { ascending: false });
   const ttbl = document.getElementById(k + '-ttbl');
   ttbl.innerHTML = txns?.length
-    ? txns.map(t => '<tr><td>' + t.transaction_date + '</td><td>' + (t[k + '_item']?.name || '') + '</td><td>$' + Number(t.amount).toFixed(2) + '</td><td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delTxn(\'' + k + '\',\'' + t[k + '_transaction_id'] + '\')" >Del</button></td></tr>').join('')
-    : '<tr><td colspan=4 class="empty">None</td></tr>';
+    ? txns.map(t => {
+        const src = t.txn_source === 'community'
+          ? '<span class="badge bc">community: ' + (t.comm?.name || '') + '</span>'
+          : '<span class="badge bp2">personal</span>';
+        return '<tr><td>' + t.transaction_date + '</td><td>' + (t[k + '_item']?.name || '') + '</td><td>$' + Number(t.amount).toFixed(2) + '</td><td>' + src + '</td><td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delTxn(\'' + k + '\',\'' + t[k + '_transaction_id'] + '\')" >Del</button></td></tr>';
+      }).join('')
+    : '<tr><td colspan=5 class="empty">None</td></tr>';
 }
 
 async function addItem(k) {
@@ -215,8 +319,11 @@ async function addLine(k) {
   const period_id = document.getElementById(k + '-ps').value;
   const item_id = document.getElementById(k + '-isel').value;
   const budgeted_amount = parseFloat(document.getElementById(k + '-bamt').value);
+  const budget_source = document.getElementById(k + '-bsrc').value;
+  const community_profile_id = document.getElementById(k + '-bcomm').value || null;
   if (!period_id || !item_id || isNaN(budgeted_amount)) return msg(k + '-lm', 'All fields required', 'e');
-  const row = { period_id, [k + '_item_id']: item_id, budgeted_amount };
+  if (budget_source === 'community' && !community_profile_id) return msg(k + '-lm', 'Select a community profile', 'e');
+  const row = { period_id, [k + '_item_id']: item_id, budgeted_amount, budget_source, community_profile_id };
   const { error } = await sb.from(k + '_budget_line').insert(row);
   if (error) return msg(k + '-lm', error.message, 'e');
   msg(k + '-lm', 'Set!', 's'); document.getElementById(k + '-bamt').value = '';
@@ -231,8 +338,11 @@ async function logTxn(k) {
   const item_id = document.getElementById(k + '-txn-isel').value;
   const transaction_date = document.getElementById(k + '-txn-date').value;
   const amount = parseFloat(document.getElementById(k + '-txn-amt').value);
+  const txn_source = document.getElementById(k + '-tsrc').value;
+  const community_profile_id = document.getElementById(k + '-tcomm').value || null;
   if (!period_id || !item_id || !transaction_date || isNaN(amount)) return msg(k + '-tm', 'All fields required', 'e');
-  const row = { period_id, [k + '_item_id']: item_id, transaction_date, amount };
+  if (txn_source === 'community' && !community_profile_id) return msg(k + '-tm', 'Select a community profile', 'e');
+  const row = { period_id, [k + '_item_id']: item_id, transaction_date, amount, txn_source, community_profile_id };
   const { error } = await sb.from(k + '_transaction').insert(row);
   if (error) return msg(k + '-tm', error.message, 'e');
   msg(k + '-tm', 'Logged!', 's'); document.getElementById(k + '-txn-amt').value = '';
@@ -243,10 +353,11 @@ async function delTxn(k, id) {
   await loadCat(k);
 }
 
+// ---- DASHBOARD ----
 async function onPC() {
   ST.pid = document.getElementById('gp').value;
   const p = ST.periods.find(x => x.period_id === ST.pid);
-  document.getElementById('plbl').textContent = p ? p.label : 'No period selected';
+  document.getElementById('plbl').textContent = p ? p.label + ' (' + (p.budget_profile?.name || '') + ')' : 'No period selected';
   await loadDash();
 }
 async function loadDash() {

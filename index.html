@@ -6,7 +6,7 @@
 <title>Budget Manager</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--accent:#6c7bff;--accent2:#a78bfa;--text:#e2e8f0;--muted:#64748b;--danger:#f87171;--success:#34d399;--border:#2d3148;}
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--accent:#6c7bff;--accent2:#a78bfa;--text:#e2e8f0;--muted:#64748b;--danger:#f87171;--success:#34d399;--border:#2d3148;--community:#f59e0b;}
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;}
 header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:16px;}
@@ -40,16 +40,18 @@ tr:hover td{background:var(--surface2);}
 .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:700;}
 .bg{background:rgba(52,211,153,.15);color:var(--success);}
 .br{background:rgba(248,113,113,.15);color:var(--danger);}
+.bc{background:rgba(245,158,11,.15);color:var(--community);}
+.bp2{background:rgba(108,123,255,.15);color:var(--accent);}
 .sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px;margin-bottom:20px;}
 .stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;}
 .stat .lbl{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
 .stat .val{font-size:1.4rem;font-weight:700;color:var(--accent);}
-.stat .sub{font-size:.75rem;color:var(--muted);margin-top:2px;}
 .empty{color:var(--muted);font-size:.875rem;text-align:center;padding:24px;}
 .msg{padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:.85rem;}
 .ms{background:rgba(52,211,153,.1);color:var(--success);border:1px solid rgba(52,211,153,.3);}
 .me{background:rgba(248,113,113,.1);color:var(--danger);border:1px solid rgba(248,113,113,.3);}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+.comm-banner{background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:.85rem;color:var(--community);}
 @media(max-width:700px){.layout{flex-direction:column;}nav{width:100%;border-right:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;padding:8px;}nav button{width:auto;padding:6px 12px;}}
 </style>
 </head>
@@ -62,6 +64,7 @@ tr:hover td{background:var(--surface2);}
   <button onclick="nav('profiles')" id="nb-profiles">&#128100; Profiles</button>
   <button onclick="nav('periods')" id="nb-periods">&#128197; Periods</button>
   <button onclick="nav('income')" id="nb-income">&#128181; Income</button>
+  <button onclick="nav('community')" id="nb-community">&#127968; Community</button>
   <div class="sl">Categories</div>
   <button onclick="nav('food')" id="nb-food">&#128722; Food</button>
   <button onclick="nav('hygiene')" id="nb-hygiene">&#129524; Hygiene</button>
@@ -91,11 +94,19 @@ tr:hover td{background:var(--surface2);}
 <div class="page" id="pg-profiles">
   <h2>Profiles</h2>
   <div class="card"><h3>Add Profile</h3><div id="pm"></div>
-    <div class="fr"><div class="fg"><label>Name</label><input id="pn" placeholder="My Budget"></div>
-    <button class="btn bp" onclick="addProfile()">Add</button></div>
+    <div class="fr">
+      <div class="fg"><label>Name</label><input id="pn" placeholder="My Budget"></div>
+      <div class="fg"><label>Type</label>
+        <select id="ptype">
+          <option value="personal">Personal</option>
+          <option value="community">Community</option>
+        </select>
+      </div>
+      <button class="btn bp" onclick="addProfile()">Add</button>
+    </div>
   </div>
   <div class="card"><h3>All Profiles</h3>
-    <table><thead><tr><th>Name</th><th>Created</th><th></th></tr></thead><tbody id="pt"></tbody></table>
+    <table><thead><tr><th>Name</th><th>Type</th><th>Created</th><th></th></tr></thead><tbody id="pt"></tbody></table>
   </div>
 </div>
 
@@ -111,7 +122,7 @@ tr:hover td{background:var(--surface2);}
     </div>
   </div>
   <div class="card"><h3>All Periods</h3>
-    <table><thead><tr><th>Profile</th><th>Label</th><th>Start</th><th>End</th><th></th></tr></thead><tbody id="pdt"></tbody></table>
+    <table><thead><tr><th>Profile</th><th>Type</th><th>Label</th><th>Start</th><th>End</th><th></th></tr></thead><tbody id="pdt"></tbody></table>
   </div>
 </div>
 
@@ -137,11 +148,41 @@ tr:hover td{background:var(--surface2);}
   </div>
 </div>
 
+<div class="page" id="pg-community">
+  <h2>&#129309; Community Budgets</h2>
+  <div class="comm-banner">Community profiles are shared budgets. Members contribute a weighted share. Items tagged as community on any category page appear here and show as met in personal budgets.</div>
+
+  <div class="card"><h3>Add Member to Community</h3><div id="cm-msg"></div>
+    <div class="fr">
+      <div class="fg"><label>Community Profile</label><select id="cm-community"><option value="">--</option></select></div>
+      <div class="fg"><label>Personal Profile</label><select id="cm-personal"><option value="">--</option></select></div>
+      <div class="fg"><label>Share Weight (%)</label><input type="number" id="cm-weight" placeholder="50" min="1" max="100"></div>
+      <button class="btn bp" onclick="addMember()">Add Member</button>
+    </div>
+  </div>
+  <div class="card"><h3>Members</h3>
+    <table><thead><tr><th>Community</th><th>Personal Profile</th><th>Share</th><th></th></tr></thead><tbody id="cm-table"></tbody></table>
+  </div>
+
+  <div class="card"><h3>Community Budget Overview</h3>
+    <div class="fr"><div class="fg"><label>Select Community</label><select id="cb-community" onchange="loadCommunityBudgetView()"><option value="">--</option></select></div></div>
+    <div class="two" style="margin-top:12px">
+      <div>
+        <h3 style="font-size:.85rem;color:var(--accent2);margin-bottom:8px">Budget Lines</h3>
+        <table><thead><tr><th>Category</th><th>Item</th><th>Period</th><th>Profile</th><th>Budgeted</th></tr></thead><tbody id="cb-table"></tbody></table>
+      </div>
+      <div>
+        <h3 style="font-size:.85rem;color:var(--accent2);margin-bottom:8px">Member Shares</h3>
+        <table><thead><tr><th>Member</th><th>Share</th></tr></thead><tbody id="cb-members"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="catpages"></div>
 
 </main>
 </div>
-
 <script src="app.js"></script>
 </body>
 </html>
