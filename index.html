@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Budget Manager</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--accent:#6c7bff;--accent2:#a78bfa;--text:#e2e8f0;--muted:#64748b;--danger:#f87171;--success:#34d399;--border:#2d3148;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh;}
+header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px;display:flex;align-items:center;gap:16px;}
+header h1{font-size:1.3rem;font-weight:700;color:var(--accent);}
+header span{color:var(--muted);font-size:.85rem;}
+.layout{display:flex;min-height:calc(100vh - 57px);}
+nav{width:220px;background:var(--surface);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0;}
+nav .sl{font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--muted);padding:8px 20px 4px;}
+nav button{display:block;width:100%;text-align:left;padding:9px 20px;background:none;border:none;color:var(--text);font-size:.875rem;cursor:pointer;transition:background .15s;}
+nav button:hover{background:var(--surface2);}
+nav button.active{background:var(--surface2);color:var(--accent);border-right:3px solid var(--accent);font-weight:600;}
+main{flex:1;padding:24px;overflow-y:auto;}
+.page{display:none;}.page.active{display:block;}
+h2{font-size:1.2rem;font-weight:700;margin-bottom:16px;}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px;}
+.card h3{font-size:.95rem;font-weight:600;margin-bottom:12px;color:var(--accent2);}
+.fr{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;align-items:flex-end;}
+.fg{display:flex;flex-direction:column;gap:4px;flex:1;min-width:130px;}
+label{font-size:.75rem;color:var(--muted);font-weight:500;}
+input,select{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 10px;font-size:.875rem;outline:none;width:100%;}
+input:focus,select:focus{border-color:var(--accent);}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:.875rem;font-weight:600;transition:opacity .15s;}
+.bp{background:var(--accent);color:#fff;}
+.bd{background:var(--danger);color:#fff;}
+.btn:hover{opacity:.85;}
+table{width:100%;border-collapse:collapse;font-size:.85rem;}
+th{text-align:left;padding:8px 12px;font-size:.7rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);border-bottom:1px solid var(--border);}
+td{padding:9px 12px;border-bottom:1px solid var(--border);}
+tr:last-child td{border-bottom:none;}
+tr:hover td{background:var(--surface2);}
+.badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:700;}
+.bg{background:rgba(52,211,153,.15);color:var(--success);}
+.br{background:rgba(248,113,113,.15);color:var(--danger);}
+.sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:12px;margin-bottom:20px;}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;}
+.stat .lbl{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+.stat .val{font-size:1.4rem;font-weight:700;color:var(--accent);}
+.stat .sub{font-size:.75rem;color:var(--muted);margin-top:2px;}
+.empty{color:var(--muted);font-size:.875rem;text-align:center;padding:24px;}
+.msg{padding:10px 14px;border-radius:6px;margin-bottom:12px;font-size:.85rem;}
+.ms{background:rgba(52,211,153,.1);color:var(--success);border:1px solid rgba(52,211,153,.3);}
+.me{background:rgba(248,113,113,.1);color:var(--danger);border:1px solid rgba(248,113,113,.3);}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:700px){.layout{flex-direction:column;}nav{width:100%;border-right:none;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;padding:8px;}nav button{width:auto;padding:6px 12px;}}
+</style>
+</head>
+<body>
+<header><h1>&#128202; Budget Manager</h1><span id="plbl">No period selected</span></header>
+<div class="layout">
+<nav>
+  <div class="sl">Setup</div>
+  <button onclick="nav('dashboard')" class="active" id="nb-dashboard">&#127968; Dashboard</button>
+  <button onclick="nav('profiles')" id="nb-profiles">&#128100; Profiles</button>
+  <button onclick="nav('periods')" id="nb-periods">&#128197; Periods</button>
+  <button onclick="nav('income')" id="nb-income">&#128181; Income</button>
+  <div class="sl">Categories</div>
+  <button onclick="nav('food')" id="nb-food">&#128722; Food</button>
+  <button onclick="nav('hygiene')" id="nb-hygiene">&#129524; Hygiene</button>
+  <button onclick="nav('medication')" id="nb-medication">&#128138; Medication</button>
+  <button onclick="nav('communication')" id="nb-communication">&#128241; Communication</button>
+  <button onclick="nav('transportation')" id="nb-transportation">&#128663; Transportation</button>
+  <button onclick="nav('shelter')" id="nb-shelter">&#127968; Shelter</button>
+  <button onclick="nav('assets')" id="nb-assets">&#127974; Assets</button>
+  <button onclick="nav('investments')" id="nb-investments">&#128200; Investments</button>
+  <button onclick="nav('entertainment')" id="nb-entertainment">&#127916; Entertainment</button>
+  <button onclick="nav('events')" id="nb-events">&#127881; Events</button>
+</nav>
+<main>
+
+<div class="page active" id="pg-dashboard">
+  <h2>Dashboard</h2>
+  <div class="card"><h3>Active Period</h3>
+    <div class="fr"><div class="fg"><label>Period</label><select id="gp" onchange="onPC()"><option value="">-- select --</option></select></div></div>
+  </div>
+  <div class="sg" id="ss"></div>
+  <div class="card"><h3>Category Overview</h3>
+    <table><thead><tr><th>Category</th><th>Budgeted</th><th>Actual</th><th>Remaining</th></tr></thead>
+    <tbody id="st"></tbody></table>
+  </div>
+</div>
+
+<div class="page" id="pg-profiles">
+  <h2>Profiles</h2>
+  <div class="card"><h3>Add Profile</h3><div id="pm"></div>
+    <div class="fr"><div class="fg"><label>Name</label><input id="pn" placeholder="My Budget"></div>
+    <button class="btn bp" onclick="addProfile()">Add</button></div>
+  </div>
+  <div class="card"><h3>All Profiles</h3>
+    <table><thead><tr><th>Name</th><th>Created</th><th></th></tr></thead><tbody id="pt"></tbody></table>
+  </div>
+</div>
+
+<div class="page" id="pg-periods">
+  <h2>Periods</h2>
+  <div class="card"><h3>Add Period</h3><div id="pdm"></div>
+    <div class="fr">
+      <div class="fg"><label>Profile</label><select id="pd-prof"><option value="">--</option></select></div>
+      <div class="fg"><label>Label</label><input id="pd-lbl" placeholder="June 2026"></div>
+      <div class="fg"><label>Start</label><input type="date" id="pd-start"></div>
+      <div class="fg"><label>End</label><input type="date" id="pd-end"></div>
+      <button class="btn bp" onclick="addPeriod()">Add</button>
+    </div>
+  </div>
+  <div class="card"><h3>All Periods</h3>
+    <table><thead><tr><th>Profile</th><th>Label</th><th>Start</th><th>End</th><th></th></tr></thead><tbody id="pdt"></tbody></table>
+  </div>
+</div>
+
+<div class="page" id="pg-income">
+  <h2>Income</h2>
+  <div class="card"><h3>Add Income Source</h3><div id="ism"></div>
+    <div class="fr">
+      <div class="fg"><label>Profile</label><select id="is-prof"><option value="">--</option></select></div>
+      <div class="fg"><label>Source Name</label><input id="is-name" placeholder="Salary, Freelance..."></div>
+      <button class="btn bp" onclick="addSource()">Add Source</button>
+    </div>
+  </div>
+  <div class="card"><h3>Log Income</h3><div id="ilm"></div>
+    <div class="fr">
+      <div class="fg"><label>Period</label><select id="il-period"><option value="">--</option></select></div>
+      <div class="fg"><label>Source</label><select id="il-source"><option value="">--</option></select></div>
+      <div class="fg"><label>Amount</label><input type="number" id="il-amt" placeholder="0.00"></div>
+      <button class="btn bp" onclick="logIncome()">Log</button>
+    </div>
+  </div>
+  <div class="card"><h3>Income Log</h3>
+    <table><thead><tr><th>Period</th><th>Source</th><th>Amount</th><th></th></tr></thead><tbody id="ilt"></tbody></table>
+  </div>
+</div>
+
+<div id="catpages"></div>
+
+</main>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
