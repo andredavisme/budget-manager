@@ -151,6 +151,120 @@ async function delIncome(id) {
   await renderIncomeLog();
 }
 
+// ---- CSV UPLOAD HELPERS ----
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/["']/g, ''));
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    // handle quoted fields
+    const vals = [];
+    let cur = '', inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { vals.push(cur.trim()); cur = ''; }
+      else cur += ch;
+    }
+    vals.push(cur.trim());
+    const row = {};
+    headers.forEach((h, i) => row[h] = (vals[i] || '').replace(/^["']|["']$/g, ''));
+    return row;
+  });
+}
+
+async function uploadItemsCSV(k) {
+  const fileEl = document.getElementById(k + '-csv-items');
+  const msgId = k + '-csv-im';
+  if (!fileEl.files.length) return msg(msgId, 'Select a CSV file', 'e');
+  const text = await fileEl.files[0].text();
+  const rows = parseCSV(text);
+  if (!rows.length) return msg(msgId, 'No data rows found', 'e');
+  const inserts = rows.filter(r => r.name).map(r => ({ name: r.name, unit: r.unit || null }));
+  if (!inserts.length) return msg(msgId, 'Column "name" required in CSV', 'e');
+  const { error, data } = await sb.from(k + '_item').insert(inserts).select();
+  if (error) return msg(msgId, error.message, 'e');
+  msg(msgId, 'Uploaded ' + inserts.length + ' item(s)!', 's');
+  fileEl.value = '';
+  await loadCat(k);
+}
+
+async function uploadTxnsCSV(k) {
+  const fileEl = document.getElementById(k + '-csv-txns');
+  const periodEl = document.getElementById(k + '-csv-period');
+  const msgId = k + '-csv-tm';
+  const period_id = periodEl.value;
+  if (!period_id) return msg(msgId, 'Select a period first', 'e');
+  if (!fileEl.files.length) return msg(msgId, 'Select a CSV file', 'e');
+  const text = await fileEl.files[0].text();
+  const rows = parseCSV(text);
+  if (!rows.length) return msg(msgId, 'No data rows found', 'e');
+
+  // fetch items for this category to resolve names -> ids
+  const { data: items } = await sb.from(k + '_item').select('*');
+  const itemMap = {};
+  (items || []).forEach(i => itemMap[i.name.toLowerCase()] = i[k + '_item_id']);
+
+  // fetch community profiles to resolve names -> ids
+  const commMap = {};
+  ST.profiles.filter(p => p.profile_type === 'community').forEach(p => commMap[p.name.toLowerCase()] = p.profile_id);
+
+  const inserts = [];
+  const errs = [];
+  rows.forEach((r, idx) => {
+    const itemName = (r.item_name || r.item || '').toLowerCase();
+    const item_id = itemMap[itemName];
+    if (!item_id) { errs.push('Row ' + (idx + 2) + ': item "' + itemName + '" not found'); return; }
+    const amount = parseFloat(r.amount);
+    if (isNaN(amount)) { errs.push('Row ' + (idx + 2) + ': invalid amount'); return; }
+    const transaction_date = r.date || r.transaction_date;
+    if (!transaction_date) { errs.push('Row ' + (idx + 2) + ': date required'); return; }
+    const txn_source = (r.source || 'personal').toLowerCase();
+    const community_profile_id = txn_source === 'community' ? (commMap[(r.community_name || '').toLowerCase()] || null) : null;
+    inserts.push({ period_id, [k + '_item_id']: item_id, transaction_date, amount, txn_source, community_profile_id });
+  });
+
+  if (errs.length) return msg(msgId, errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' ...' : ''), 'e');
+  const { error } = await sb.from(k + '_transaction').insert(inserts);
+  if (error) return msg(msgId, error.message, 'e');
+  msg(msgId, 'Uploaded ' + inserts.length + ' transaction(s)!', 's');
+  fileEl.value = '';
+  await loadCat(k);
+}
+
+async function uploadIncomeCSV() {
+  const fileEl = document.getElementById('il-csv-file');
+  const msgId = 'il-csv-msg';
+  if (!fileEl.files.length) return msg(msgId, 'Select a CSV file', 'e');
+  const text = await fileEl.files[0].text();
+  const rows = parseCSV(text);
+  if (!rows.length) return msg(msgId, 'No data rows found', 'e');
+
+  const periodMap = {};
+  ST.periods.forEach(p => periodMap[p.label.toLowerCase()] = p.period_id);
+  const sourceMap = {};
+  ST.sources.forEach(s => sourceMap[s.name.toLowerCase()] = s.income_source_id);
+
+  const inserts = [];
+  const errs = [];
+  rows.forEach((r, idx) => {
+    const period_id = periodMap[(r.period_label || r.period || '').toLowerCase()];
+    if (!period_id) { errs.push('Row ' + (idx + 2) + ': period not found'); return; }
+    const income_source_id = sourceMap[(r.source_name || r.source || '').toLowerCase()];
+    if (!income_source_id) { errs.push('Row ' + (idx + 2) + ': source not found'); return; }
+    const amount = parseFloat(r.amount);
+    if (isNaN(amount)) { errs.push('Row ' + (idx + 2) + ': invalid amount'); return; }
+    inserts.push({ period_id, income_source_id, amount });
+  });
+
+  if (errs.length) return msg(msgId, errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' ...' : ''), 'e');
+  const { error } = await sb.from('monthly_income').insert(inserts);
+  if (error) return msg(msgId, error.message, 'e');
+  msg(msgId, 'Uploaded ' + inserts.length + ' income row(s)!', 's');
+  fileEl.value = '';
+  await renderIncomeLog();
+}
+
 // ---- COMMUNITY PAGE ----
 async function loadCommunityPage() {
   await loadProfiles();
@@ -232,12 +346,24 @@ function buildCatPages() {
   document.getElementById('catpages').innerHTML = CATS.map(c =>
     '<div class="page" id="pg-' + c.k + '">' +
     '<h2>' + c.l + '</h2>' +
+
+    // Add Item
     '<div class="card"><h3>Add Item</h3><div id="' + c.k + '-im"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Item Name</label><input id="' + c.k + '-iname" placeholder="Item name"></div>' +
         '<div class="fg"><label>Unit</label><input id="' + c.k + '-iunit" placeholder="pkg, mo, gal"></div>' +
         '<button class="btn bp" onclick="addItem(\'' + c.k + '\')" >Add Item</button>' +
       '</div></div>' +
+
+    // CSV Upload: Items
+    '<div class="card"><h3>&#128196; Bulk Upload Items (CSV)</h3><div id="' + c.k + '-csv-im"></div>' +
+      '<p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>name</code>, <code>unit</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV(\'items\')" style="color:var(--accent)">Download sample</a></p>' +
+      '<div class="fr">' +
+        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-items" accept=".csv"></div>' +
+        '<button class="btn bp" onclick="uploadItemsCSV(\'' + c.k + '\')" >Upload Items</button>' +
+      '</div></div>' +
+
+    // Set Budget Line
     '<div class="card"><h3>Set Budget Line</h3><div id="' + c.k + '-lm"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Period</label><select id="' + c.k + '-ps"><option value="">--</option></select></div>' +
@@ -247,6 +373,8 @@ function buildCatPages() {
         '<div class="fg"><label>Community (if shared)</label><select id="' + c.k + '-bcomm"><option value="">--</option></select></div>' +
         '<button class="btn bp" onclick="addLine(\'' + c.k + '\')" >Set</button>' +
       '</div></div>' +
+
+    // Log Transaction
     '<div class="card"><h3>Log Transaction</h3><div id="' + c.k + '-tm"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Period</label><select id="' + c.k + '-txn-ps"><option value="">--</option></select></div>' +
@@ -257,6 +385,17 @@ function buildCatPages() {
         '<div class="fg"><label>Community (if shared)</label><select id="' + c.k + '-tcomm"><option value="">--</option></select></div>' +
         '<button class="btn bp" onclick="logTxn(\'' + c.k + '\')" >Log</button>' +
       '</div></div>' +
+
+    // CSV Upload: Transactions
+    '<div class="card"><h3>&#128196; Bulk Upload Transactions (CSV)</h3><div id="' + c.k + '-csv-tm"></div>' +
+      '<p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>date</code>, <code>item_name</code>, <code>amount</code>, <code>source</code> (personal/community), <code>community_name</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV(\'transactions\')" style="color:var(--accent)">Download sample</a></p>' +
+      '<div class="fr">' +
+        '<div class="fg"><label>Period</label><select id="' + c.k + '-csv-period"><option value="">--</option></select></div>' +
+        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-txns" accept=".csv"></div>' +
+        '<button class="btn bp" onclick="uploadTxnsCSV(\'' + c.k + '\')" >Upload Transactions</button>' +
+      '</div></div>' +
+
+    // Tables
     '<div class="two">' +
       '<div class="card"><h3>Items</h3><table><thead><tr><th>Name</th><th>Unit</th><th></th></tr></thead><tbody id="' + c.k + '-itbl"></tbody></table></div>' +
       '<div class="card"><h3>Budget Lines</h3><table><thead><tr><th>Period</th><th>Item</th><th>Budget</th><th>Source</th><th></th></tr></thead><tbody id="' + c.k + '-ltbl"></tbody></table></div>' +
@@ -275,7 +414,7 @@ async function loadCat(k) {
   const iOpts = '<option value="">--</option>' + (items || []).map(i => '<option value="' + i[k + '_item_id'] + '">' + i.name + '</option>').join('');
   [k + '-isel', k + '-txn-isel'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = iOpts; });
   const pOpts = '<option value="">--</option>' + ST.periods.map(p => '<option value="' + p.period_id + '">' + p.label + ' (' + (p.budget_profile?.name || '') + ')</option>').join('');
-  [k + '-ps', k + '-txn-ps'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = pOpts; });
+  [k + '-ps', k + '-txn-ps', k + '-csv-period'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = pOpts; });
   const commOpts = '<option value="">--</option>' + ST.profiles.filter(p => p.profile_type === 'community').map(p => '<option value="' + p.profile_id + '">' + p.name + '</option>').join('');
   [k + '-bcomm', k + '-tcomm'].forEach(id => { const e = document.getElementById(id); if (e) e.innerHTML = commOpts; });
   const { data: lines } = await sb.from(k + '_budget_line').select('*, budget_period(label), ' + k + '_item(name), comm:community_profile_id(name)').order(k + '_budget_line_id', { ascending: false });
@@ -351,6 +490,25 @@ async function logTxn(k) {
 async function delTxn(k, id) {
   await sb.from(k + '_transaction').delete().eq(k + '_transaction_id', id);
   await loadCat(k);
+}
+
+// ---- SAMPLE CSV DOWNLOADS ----
+function downloadSampleCSV(type) {
+  let content, filename;
+  if (type === 'items') {
+    content = 'name,unit\nMilk,gallon\nBread,loaf\nEggs,dozen';
+    filename = 'sample_items.csv';
+  } else if (type === 'transactions') {
+    content = 'date,item_name,amount,source,community_name\n2026-06-01,Milk,4.99,personal,\n2026-06-02,Bread,3.49,personal,';
+    filename = 'sample_transactions.csv';
+  } else if (type === 'income') {
+    content = 'period_label,source_name,amount\nJune 2026,Salary,3500.00\nJune 2026,Freelance,500.00';
+    filename = 'sample_income.csv';
+  }
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(content);
+  a.download = filename;
+  a.click();
 }
 
 // ---- DASHBOARD ----
