@@ -151,13 +151,12 @@ async function delIncome(id) {
   await renderIncomeLog();
 }
 
-// ---- CSV UPLOAD HELPERS ----
+// ---- CSV HELPERS ----
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
   const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/["']/g, ''));
   return lines.slice(1).filter(l => l.trim()).map(line => {
-    // handle quoted fields
     const vals = [];
     let cur = '', inQ = false;
     for (let i = 0; i < line.length; i++) {
@@ -173,25 +172,85 @@ function parseCSV(text) {
   });
 }
 
-async function uploadItemsCSV(k) {
+// Renders a pre-flight table into containerId.
+// validated = array of { ok: bool, fields: [{label, value, ok, note}], insert: obj|null }
+// onConfirm = async fn called with valid inserts when user clicks Confirm
+function renderPreflight(containerId, validated, columns, onConfirm) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const hasErrors = validated.some(r => !r.ok);
+  const goodCount = validated.filter(r => r.ok).length;
+
+  const statusCell = (f) => {
+    const icon = f.ok ? '&#9989;' : '&#10060;';
+    const note = f.note ? ' <span style="color:var(--danger);font-size:.72rem">' + f.note + '</span>' : '';
+    return '<td>' + icon + ' <span style="font-size:.82rem">' + (f.value || '<em style="color:var(--muted)">—</em>') + '</span>' + note + '</td>';
+  };
+
+  const headerCells = columns.map(c => '<th>' + c + '</th>').join('');
+  const bodyRows = validated.map((r, i) => {
+    const rowStyle = r.ok ? '' : 'background:rgba(248,113,113,.07);';
+    return '<tr style="' + rowStyle + '"><td style="color:var(--muted);font-size:.75rem">Row ' + (i + 2) + '</td>' +
+      r.fields.map(statusCell).join('') + '</tr>';
+  }).join('');
+
+  const summary = hasErrors
+    ? '<div class="msg me" style="margin-bottom:10px">&#9888; ' + (validated.length - goodCount) + ' row(s) have errors and will be skipped. Fix the CSV and re-preview, or confirm to insert only the ' + goodCount + ' valid row(s).</div>'
+    : '<div class="msg ms" style="margin-bottom:10px">&#9989; All ' + goodCount + ' row(s) look good. Ready to insert.</div>';
+
+  const confirmBtn = goodCount > 0
+    ? '<button class="btn bp" style="margin-top:10px" id="' + containerId + '-confirm">Confirm &amp; Insert ' + goodCount + ' row(s)</button>'
+    : '';
+
+  el.innerHTML = summary +
+    '<div style="overflow-x:auto"><table><thead><tr><th>#</th>' + headerCells + '</tr></thead><tbody>' + bodyRows + '</tbody></table></div>' +
+    confirmBtn;
+
+  if (goodCount > 0) {
+    document.getElementById(containerId + '-confirm').addEventListener('click', async () => {
+      const validInserts = validated.filter(r => r.ok).map(r => r.insert);
+      await onConfirm(validInserts);
+      el.innerHTML = '';
+    });
+  }
+}
+
+// ---- ITEMS CSV ----
+async function previewItemsCSV(k) {
   const fileEl = document.getElementById(k + '-csv-items');
+  const previewId = k + '-csv-items-preview';
   const msgId = k + '-csv-im';
   if (!fileEl.files.length) return msg(msgId, 'Select a CSV file', 'e');
   const text = await fileEl.files[0].text();
   const rows = parseCSV(text);
   if (!rows.length) return msg(msgId, 'No data rows found', 'e');
-  const inserts = rows.filter(r => r.name).map(r => ({ name: r.name, unit: r.unit || null }));
-  if (!inserts.length) return msg(msgId, 'Column "name" required in CSV', 'e');
-  const { error, data } = await sb.from(k + '_item').insert(inserts).select();
-  if (error) return msg(msgId, error.message, 'e');
-  msg(msgId, 'Uploaded ' + inserts.length + ' item(s)!', 's');
-  fileEl.value = '';
-  await loadCat(k);
+
+  const validated = rows.map(r => {
+    const nameOk = !!r.name;
+    return {
+      ok: nameOk,
+      fields: [
+        { label: 'name', value: r.name, ok: nameOk, note: nameOk ? '' : 'required' },
+        { label: 'unit', value: r.unit || '', ok: true, note: '' },
+      ],
+      insert: nameOk ? { name: r.name, unit: r.unit || null } : null,
+    };
+  });
+
+  renderPreflight(previewId, validated, ['Name', 'Unit'], async (inserts) => {
+    const { error } = await sb.from(k + '_item').insert(inserts);
+    if (error) return msg(msgId, error.message, 'e');
+    msg(msgId, 'Inserted ' + inserts.length + ' item(s)!', 's');
+    fileEl.value = '';
+    await loadCat(k);
+  });
 }
 
-async function uploadTxnsCSV(k) {
+// ---- TRANSACTIONS CSV ----
+async function previewTxnsCSV(k) {
   const fileEl = document.getElementById(k + '-csv-txns');
   const periodEl = document.getElementById(k + '-csv-period');
+  const previewId = k + '-csv-txns-preview';
   const msgId = k + '-csv-tm';
   const period_id = periodEl.value;
   if (!period_id) return msg(msgId, 'Select a period first', 'e');
@@ -200,40 +259,57 @@ async function uploadTxnsCSV(k) {
   const rows = parseCSV(text);
   if (!rows.length) return msg(msgId, 'No data rows found', 'e');
 
-  // fetch items for this category to resolve names -> ids
   const { data: items } = await sb.from(k + '_item').select('*');
   const itemMap = {};
   (items || []).forEach(i => itemMap[i.name.toLowerCase()] = i[k + '_item_id']);
-
-  // fetch community profiles to resolve names -> ids
   const commMap = {};
   ST.profiles.filter(p => p.profile_type === 'community').forEach(p => commMap[p.name.toLowerCase()] = p.profile_id);
 
-  const inserts = [];
-  const errs = [];
-  rows.forEach((r, idx) => {
-    const itemName = (r.item_name || r.item || '').toLowerCase();
-    const item_id = itemMap[itemName];
-    if (!item_id) { errs.push('Row ' + (idx + 2) + ': item "' + itemName + '" not found'); return; }
-    const amount = parseFloat(r.amount);
-    if (isNaN(amount)) { errs.push('Row ' + (idx + 2) + ': invalid amount'); return; }
-    const transaction_date = r.date || r.transaction_date;
-    if (!transaction_date) { errs.push('Row ' + (idx + 2) + ': date required'); return; }
+  const validated = rows.map(r => {
+    const itemName = (r.item_name || r.item || '').trim();
+    const item_id = itemMap[itemName.toLowerCase()];
+    const itemOk = !!item_id;
+
+    const dateVal = r.date || r.transaction_date || '';
+    const dateOk = !!dateVal;
+
+    const amountVal = r.amount;
+    const amount = parseFloat(amountVal);
+    const amountOk = !isNaN(amount);
+
     const txn_source = (r.source || 'personal').toLowerCase();
-    const community_profile_id = txn_source === 'community' ? (commMap[(r.community_name || '').toLowerCase()] || null) : null;
-    inserts.push({ period_id, [k + '_item_id']: item_id, transaction_date, amount, txn_source, community_profile_id });
+    const srcOk = ['personal', 'community'].includes(txn_source);
+
+    const commName = (r.community_name || '').trim();
+    const community_profile_id = txn_source === 'community' ? (commMap[commName.toLowerCase()] || null) : null;
+    const commOk = txn_source !== 'community' || !!community_profile_id;
+
+    const rowOk = itemOk && dateOk && amountOk && srcOk && commOk;
+    return {
+      ok: rowOk,
+      fields: [
+        { label: 'date', value: dateVal, ok: dateOk, note: dateOk ? '' : 'required' },
+        { label: 'item_name', value: itemName, ok: itemOk, note: itemOk ? '' : 'not found' },
+        { label: 'amount', value: amountVal, ok: amountOk, note: amountOk ? '' : 'invalid' },
+        { label: 'source', value: txn_source, ok: srcOk && commOk, note: !srcOk ? 'must be personal/community' : !commOk ? 'community not found' : '' },
+      ],
+      insert: rowOk ? { period_id, [k + '_item_id']: item_id, transaction_date: dateVal, amount, txn_source, community_profile_id } : null,
+    };
   });
 
-  if (errs.length) return msg(msgId, errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' ...' : ''), 'e');
-  const { error } = await sb.from(k + '_transaction').insert(inserts);
-  if (error) return msg(msgId, error.message, 'e');
-  msg(msgId, 'Uploaded ' + inserts.length + ' transaction(s)!', 's');
-  fileEl.value = '';
-  await loadCat(k);
+  renderPreflight(previewId, validated, ['Date', 'Item', 'Amount', 'Source'], async (inserts) => {
+    const { error } = await sb.from(k + '_transaction').insert(inserts);
+    if (error) return msg(msgId, error.message, 'e');
+    msg(msgId, 'Inserted ' + inserts.length + ' transaction(s)!', 's');
+    fileEl.value = '';
+    await loadCat(k);
+  });
 }
 
-async function uploadIncomeCSV() {
+// ---- INCOME CSV ----
+async function previewIncomeCSV() {
   const fileEl = document.getElementById('il-csv-file');
+  const previewId = 'il-csv-preview';
   const msgId = 'il-csv-msg';
   if (!fileEl.files.length) return msg(msgId, 'Select a CSV file', 'e');
   const text = await fileEl.files[0].text();
@@ -245,31 +321,62 @@ async function uploadIncomeCSV() {
   const sourceMap = {};
   ST.sources.forEach(s => sourceMap[s.name.toLowerCase()] = s.income_source_id);
 
-  const inserts = [];
-  const errs = [];
-  rows.forEach((r, idx) => {
-    const period_id = periodMap[(r.period_label || r.period || '').toLowerCase()];
-    if (!period_id) { errs.push('Row ' + (idx + 2) + ': period not found'); return; }
-    const income_source_id = sourceMap[(r.source_name || r.source || '').toLowerCase()];
-    if (!income_source_id) { errs.push('Row ' + (idx + 2) + ': source not found'); return; }
+  const validated = rows.map(r => {
+    const periodLabel = (r.period_label || r.period || '').trim();
+    const period_id = periodMap[periodLabel.toLowerCase()];
+    const periodOk = !!period_id;
+
+    const sourceName = (r.source_name || r.source || '').trim();
+    const income_source_id = sourceMap[sourceName.toLowerCase()];
+    const sourceOk = !!income_source_id;
+
     const amount = parseFloat(r.amount);
-    if (isNaN(amount)) { errs.push('Row ' + (idx + 2) + ': invalid amount'); return; }
-    inserts.push({ period_id, income_source_id, amount });
+    const amountOk = !isNaN(amount);
+
+    const rowOk = periodOk && sourceOk && amountOk;
+    return {
+      ok: rowOk,
+      fields: [
+        { label: 'period_label', value: periodLabel, ok: periodOk, note: periodOk ? '' : 'not found' },
+        { label: 'source_name', value: sourceName, ok: sourceOk, note: sourceOk ? '' : 'not found' },
+        { label: 'amount', value: r.amount, ok: amountOk, note: amountOk ? '' : 'invalid' },
+      ],
+      insert: rowOk ? { period_id, income_source_id, amount } : null,
+    };
   });
 
-  if (errs.length) return msg(msgId, errs.slice(0, 3).join('; ') + (errs.length > 3 ? ' ...' : ''), 'e');
-  const { error } = await sb.from('monthly_income').insert(inserts);
-  if (error) return msg(msgId, error.message, 'e');
-  msg(msgId, 'Uploaded ' + inserts.length + ' income row(s)!', 's');
-  fileEl.value = '';
-  await renderIncomeLog();
+  renderPreflight(previewId, validated, ['Period', 'Source', 'Amount'], async (inserts) => {
+    const { error } = await sb.from('monthly_income').insert(inserts);
+    if (error) return msg(msgId, error.message, 'e');
+    msg(msgId, 'Inserted ' + inserts.length + ' income row(s)!', 's');
+    fileEl.value = '';
+    await renderIncomeLog();
+  });
+}
+
+// ---- SAMPLE CSV DOWNLOADS ----
+function downloadSampleCSV(type) {
+  let content, filename;
+  if (type === 'items') {
+    content = 'name,unit\nMilk,gallon\nBread,loaf\nEggs,dozen';
+    filename = 'sample_items.csv';
+  } else if (type === 'transactions') {
+    content = 'date,item_name,amount,source,community_name\n2026-06-01,Milk,4.99,personal,\n2026-06-02,Bread,3.49,personal,';
+    filename = 'sample_transactions.csv';
+  } else if (type === 'income') {
+    content = 'period_label,source_name,amount\nJune 2026,Salary,3500.00\nJune 2026,Freelance,500.00';
+    filename = 'sample_income.csv';
+  }
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(content);
+  a.download = filename;
+  a.click();
 }
 
 // ---- COMMUNITY PAGE ----
 async function loadCommunityPage() {
   await loadProfiles();
   syncSelects();
-  // render members table
   const { data: members } = await sb.from('community_member')
     .select('*, community:community_profile_id(name), personal:personal_profile_id(name)')
     .order('joined_at', { ascending: false });
@@ -282,8 +389,6 @@ async function loadCommunityPage() {
         '<td><button class="btn bd" style="padding:3px 8px;font-size:.75rem" onclick="delMember(\'' + m.community_member_id + '\')" >Remove</button></td></tr>'
       ).join('')
     : '<tr><td colspan=4 class="empty">No members yet</td></tr>';
-
-  // community budget overview
   await loadCommunityBudgetView();
 }
 
@@ -308,31 +413,20 @@ async function loadCommunityBudgetView() {
   const ct = document.getElementById('cb-table');
   if (!ct) return;
   if (!comm_id) { ct.innerHTML = '<tr><td colspan=5 class="empty">Select a community above</td></tr>'; return; }
-
-  // get all members of this community
   const { data: members } = await sb.from('community_member')
     .select('*, personal:personal_profile_id(name)')
     .eq('community_profile_id', comm_id);
-
-  // get all budget lines tagged to this community across all categories
   const rows = [];
   for (const c of CATS) {
     const { data: lines } = await sb.from(c.k + '_budget_line')
       .select('*, budget_period(label, budget_profile(name, profile_type)), ' + c.k + '_item(name)')
       .eq('budget_source', 'community')
       .eq('community_profile_id', comm_id);
-    (lines || []).forEach(l => rows.push({ cat: c.l, item: l[c.k + '_item']?.name, period: l.budget_period?.label, profile: l.budget_period?.budget_profile?.name, amount: l.budgeted_amount, source: l.budget_source }));
+    (lines || []).forEach(l => rows.push({ cat: c.l, item: l[c.k + '_item']?.name, period: l.budget_period?.label, profile: l.budget_period?.budget_profile?.name, amount: l.budgeted_amount }));
   }
-
-  if (!rows.length) {
-    ct.innerHTML = '<tr><td colspan=5 class="empty">No community budget lines yet. Tag a budget line as community-sourced from a category page.</td></tr>';
-  } else {
-    ct.innerHTML = rows.map(r =>
-      '<tr><td>' + r.cat + '</td><td>' + (r.item || '') + '</td><td>' + (r.period || '') + '</td><td>' + (r.profile || '') + '</td><td>$' + Number(r.amount).toFixed(2) + '</td></tr>'
-    ).join('');
-  }
-
-  // show member split
+  ct.innerHTML = rows.length
+    ? rows.map(r => '<tr><td>' + r.cat + '</td><td>' + (r.item || '') + '</td><td>' + (r.period || '') + '</td><td>' + (r.profile || '') + '</td><td>$' + Number(r.amount).toFixed(2) + '</td></tr>').join('')
+    : '<tr><td colspan=5 class="empty">No community budget lines yet.</td></tr>';
   const mt2 = document.getElementById('cb-members');
   if (mt2) {
     mt2.innerHTML = members?.length
@@ -347,7 +441,6 @@ function buildCatPages() {
     '<div class="page" id="pg-' + c.k + '">' +
     '<h2>' + c.l + '</h2>' +
 
-    // Add Item
     '<div class="card"><h3>Add Item</h3><div id="' + c.k + '-im"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Item Name</label><input id="' + c.k + '-iname" placeholder="Item name"></div>' +
@@ -355,15 +448,15 @@ function buildCatPages() {
         '<button class="btn bp" onclick="addItem(\'' + c.k + '\')" >Add Item</button>' +
       '</div></div>' +
 
-    // CSV Upload: Items
     '<div class="card"><h3>&#128196; Bulk Upload Items (CSV)</h3><div id="' + c.k + '-csv-im"></div>' +
       '<p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>name</code>, <code>unit</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV(\'items\')" style="color:var(--accent)">Download sample</a></p>' +
       '<div class="fr">' +
-        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-items" accept=".csv"></div>' +
-        '<button class="btn bp" onclick="uploadItemsCSV(\'' + c.k + '\')" >Upload Items</button>' +
-      '</div></div>' +
+        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-items" accept=".csv" onchange="document.getElementById(\'' + c.k + '-csv-items-preview\').innerHTML=\'\'"></div>' +
+        '<button class="btn bp" onclick="previewItemsCSV(\'' + c.k + '\')" >Preview</button>' +
+      '</div>' +
+      '<div id="' + c.k + '-csv-items-preview" style="margin-top:10px"></div>' +
+    '</div>' +
 
-    // Set Budget Line
     '<div class="card"><h3>Set Budget Line</h3><div id="' + c.k + '-lm"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Period</label><select id="' + c.k + '-ps"><option value="">--</option></select></div>' +
@@ -374,7 +467,6 @@ function buildCatPages() {
         '<button class="btn bp" onclick="addLine(\'' + c.k + '\')" >Set</button>' +
       '</div></div>' +
 
-    // Log Transaction
     '<div class="card"><h3>Log Transaction</h3><div id="' + c.k + '-tm"></div>' +
       '<div class="fr">' +
         '<div class="fg"><label>Period</label><select id="' + c.k + '-txn-ps"><option value="">--</option></select></div>' +
@@ -386,16 +478,16 @@ function buildCatPages() {
         '<button class="btn bp" onclick="logTxn(\'' + c.k + '\')" >Log</button>' +
       '</div></div>' +
 
-    // CSV Upload: Transactions
     '<div class="card"><h3>&#128196; Bulk Upload Transactions (CSV)</h3><div id="' + c.k + '-csv-tm"></div>' +
-      '<p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>date</code>, <code>item_name</code>, <code>amount</code>, <code>source</code> (personal/community), <code>community_name</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV(\'transactions\')" style="color:var(--accent)">Download sample</a></p>' +
+      '<p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>date</code>, <code>item_name</code>, <code>amount</code>, <code>source</code>, <code>community_name</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV(\'transactions\')" style="color:var(--accent)">Download sample</a></p>' +
       '<div class="fr">' +
         '<div class="fg"><label>Period</label><select id="' + c.k + '-csv-period"><option value="">--</option></select></div>' +
-        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-txns" accept=".csv"></div>' +
-        '<button class="btn bp" onclick="uploadTxnsCSV(\'' + c.k + '\')" >Upload Transactions</button>' +
-      '</div></div>' +
+        '<div class="fg"><label>CSV File</label><input type="file" id="' + c.k + '-csv-txns" accept=".csv" onchange="document.getElementById(\'' + c.k + '-csv-txns-preview\').innerHTML=\'\'"></div>' +
+        '<button class="btn bp" onclick="previewTxnsCSV(\'' + c.k + '\')" >Preview</button>' +
+      '</div>' +
+      '<div id="' + c.k + '-csv-txns-preview" style="margin-top:10px"></div>' +
+    '</div>' +
 
-    // Tables
     '<div class="two">' +
       '<div class="card"><h3>Items</h3><table><thead><tr><th>Name</th><th>Unit</th><th></th></tr></thead><tbody id="' + c.k + '-itbl"></tbody></table></div>' +
       '<div class="card"><h3>Budget Lines</h3><table><thead><tr><th>Period</th><th>Item</th><th>Budget</th><th>Source</th><th></th></tr></thead><tbody id="' + c.k + '-ltbl"></tbody></table></div>' +
@@ -490,25 +582,6 @@ async function logTxn(k) {
 async function delTxn(k, id) {
   await sb.from(k + '_transaction').delete().eq(k + '_transaction_id', id);
   await loadCat(k);
-}
-
-// ---- SAMPLE CSV DOWNLOADS ----
-function downloadSampleCSV(type) {
-  let content, filename;
-  if (type === 'items') {
-    content = 'name,unit\nMilk,gallon\nBread,loaf\nEggs,dozen';
-    filename = 'sample_items.csv';
-  } else if (type === 'transactions') {
-    content = 'date,item_name,amount,source,community_name\n2026-06-01,Milk,4.99,personal,\n2026-06-02,Bread,3.49,personal,';
-    filename = 'sample_transactions.csv';
-  } else if (type === 'income') {
-    content = 'period_label,source_name,amount\nJune 2026,Salary,3500.00\nJune 2026,Freelance,500.00';
-    filename = 'sample_income.csv';
-  }
-  const a = document.createElement('a');
-  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(content);
-  a.download = filename;
-  a.click();
 }
 
 // ---- DASHBOARD ----

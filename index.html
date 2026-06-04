@@ -148,9 +148,10 @@ code{background:var(--surface2);padding:1px 5px;border-radius:3px;font-size:.78r
   <div class="card"><h3>&#128196; Bulk Upload Income (CSV)</h3><div id="il-csv-msg"></div>
     <p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">CSV columns: <code>period_label</code>, <code>source_name</code>, <code>amount</code> &nbsp;|&nbsp; <a href="#" onclick="downloadSampleCSV('income')" style="color:var(--accent)">Download sample</a></p>
     <div class="fr">
-      <div class="fg"><label>CSV File</label><input type="file" id="il-csv-file" accept=".csv"></div>
-      <button class="btn bp" onclick="uploadIncomeCSV()">Upload Income</button>
+      <div class="fg"><label>CSV File</label><input type="file" id="il-csv-file" accept=".csv" onchange="document.getElementById('il-csv-preview').innerHTML=''"></div>
+      <button class="btn bp" onclick="previewIncomeCSV()">Preview</button>
     </div>
+    <div id="il-csv-preview" style="margin-top:10px"></div>
   </div>
   <div class="card"><h3>Income Log</h3>
     <table><thead><tr><th>Period</th><th>Source</th><th>Amount</th><th></th></tr></thead><tbody id="ilt"></tbody></table>
@@ -160,7 +161,6 @@ code{background:var(--surface2);padding:1px 5px;border-radius:3px;font-size:.78r
 <div class="page" id="pg-community">
   <h2>&#129309; Community Budgets</h2>
   <div class="comm-banner">Community profiles are shared budgets. Members contribute a weighted share. Items tagged as community on any category page appear here and show as met in personal budgets.</div>
-
   <div class="card"><h3>Add Member to Community</h3><div id="cm-msg"></div>
     <div class="fr">
       <div class="fg"><label>Community Profile</label><select id="cm-community"><option value="">--</option></select></div>
@@ -172,7 +172,6 @@ code{background:var(--surface2);padding:1px 5px;border-radius:3px;font-size:.78r
   <div class="card"><h3>Members</h3>
     <table><thead><tr><th>Community</th><th>Personal Profile</th><th>Share</th><th></th></tr></thead><tbody id="cm-table"></tbody></table>
   </div>
-
   <div class="card"><h3>Community Budget Overview</h3>
     <div class="fr"><div class="fg"><label>Select Community</label><select id="cb-community" onchange="loadCommunityBudgetView()"><option value="">--</option></select></div></div>
     <div class="two" style="margin-top:12px">
